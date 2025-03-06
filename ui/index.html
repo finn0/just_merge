@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- <link rel="stylesheet" type="text/css" href="./assets/vanilla-framework-version-4.21.0.min.css" /> -->
+    <link rel="stylesheet" href="./assets/custom.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <input type="text" id="mr-url" placeholder="Enter GitLab Merge Request URL">
+            <button id="send-btn" onclick="send_mr()">Send</button>
+            <div class="config-icon" id="config-icon">⚙️</div>
+        </div>
+        <div class="log-area" id="log-area"></div>
+    </div>
+
+    <!-- Configuration Dialog -->
+    <div id="config-dialog" class="config-dialog">
+        <div class="config-content">
+            <span class="close-btn" id="close-btn">&times;</span>
+            <h2>Configuration</h2>
+            <label for="api-token">GitLab API Access Token:</label>
+            <input type="text" id="api-token" placeholder="Enter your GitLab API Access Token">
+            <button id="save-token">Save</button>
+        </div>
+    </div>
+
+    <script>
+        // const sendBtn = document.getElementById('send-btn');
+        // const configIcon = document.getElementById('config-icon');
+        // const configDialog = document.getElementById('config-dialog');
+        // const closeBtn = document.getElementById('close-btn');
+        // const saveTokenBtn = document.getElementById('save-token');
+        // const logArea = document.getElementById('log-area');
+        const mrUrlInput = document.getElementById('mr-url');
+        // const apiTokenInput = document.getElementById('api-token');
+
+        // // 打开配置对话框
+        // configIcon.addEventListener('click', () => {
+        //     configDialog.style.display = 'block';
+        // });
+
+        // // 关闭配置对话框
+        // closeBtn.addEventListener('click', () => {
+        //     configDialog.style.display = 'none';
+        // });
+
+        // // 保存 API Token
+        // saveTokenBtn.addEventListener('click', () => {
+        //     const token = apiTokenInput.value;
+        //     // 这里可以调用 Tauri 的 invoke 方法保存 token
+        //     console.log('Token saved:', token);
+        //     configDialog.style.display = 'none';
+        // });
+
+        // Tauti
+        const { window: tauriWindow } = window.__TAURI__;
+        const invoke = window.__TAURI__.core.invoke;
+        // const listen = window.__TAURI__.event.listen;
+
+        // 发送 Merge Request URL
+        async function send_mr() {
+            const url = mrUrlInput.value;
+            if (url) {
+                // try {
+                // 调用 Tauri 的 invoke 方法发送 URL
+                const response = await invoke('process_mr', { url });
+                logArea.innerHTML += `<div>${response}</div>`;
+                // } catch (error) {
+                // logArea.innerHTML += `<div style="color: red;">Error: ${error.message}</div>`;
+                // }
+            } else {
+                logArea.innerHTML += `<div style="color: red;">Please enter a valid URL</div>`;
+            }
+        }
+        // sendBtn.addEventListener('click', async () => {
+        //     const url = mrUrlInput.value;
+        //     if (url) {
+        //         try {
+        //             // 调用 Tauri 的 invoke 方法发送 URL
+        //             const response = await invoke('process_mr', { url });
+        //             logArea.innerHTML += `<div>${response}</div>`;
+        //         } catch (error) {
+        //             logArea.innerHTML += `<div style="color: red;">Error: ${error.message}</div>`;
+        //         }
+        //     } else {
+        //         logArea.innerHTML += `<div style="color: red;">Please enter a valid URL</div>`;
+        //     }
+        // }); 
+    </script>
+</body>
+
+</html>

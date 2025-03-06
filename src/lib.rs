@@ -1,3 +1,4 @@
+use log::info;
 use tauri::WindowEvent;
 
 mod tray;
@@ -7,12 +8,14 @@ pub fn run() {
     tauri::Builder::default()
         // Plugins
         .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Debug).build())
+        // Invoke Handler
+        .invoke_handler(tauri::generate_handler![process_mr])
         // Window Event Override
         .on_window_event(|window, event| {
             // > 1. Only hide `main` window.
-            // todo: will panic if `cmd+w`
-            // >> thread 'main' panicked at /Users/finn/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tao-0.32.7/src/platform_impl/macos/app.rs:43:19:
-            // >> messsaging sendEvent: to nil
+            // > 2. todo: will panic if `cmd+w`
+            // https://github.com/tauri-apps/tauri/issues/12888
+            // https://github.com/tauri-apps/tao/issues/1086
             if let ("main", WindowEvent::CloseRequested { api, .. }) = (window.label(), event) {
                 window.hide().unwrap();
                 api.prevent_close();
@@ -22,11 +25,17 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 tray::init_tray(app.handle()).unwrap();
-                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                // app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
 
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn process_mr(url: String) -> String {
+    info!("Processing Merge Request URL: {}", url);
+    format!("Processing Merge Request URL: {}", url)
 }

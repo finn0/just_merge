@@ -31,10 +31,12 @@ pub fn init_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
                 }
                 _ => {}
             }
-            // todo: Click 'X' not quit, but hide.
-            // todo: collect log into mpsc, and send to main window
         })
         .build(app)?;
 
     Ok(())
 }
+
+// TODO
+// > First time run the app? Show the window and make some configurations.
+// > Collect log into mpsc, and send to main window
