@@ -38,6 +38,19 @@ html {
     font-size: 24px;
 }
 
+@font-face {
+    font-family: 'JetBrainsMono';
+    src: url('./JetBrainsMono-VariableFont_wght.ttf') format('truetype');
+    /* font-weight: 100; */
+    font-style: normal;
+}
+
+.mono-font {
+    font-family: 'JetBrainsMono';
+    font-size: 14px;
+    /* font-weight: 100; */
+}
+
 .log-area {
     flex: 1;
     margin-top: 10px;
@@ -87,4 +100,39 @@ html {
 .config-content button {
     padding: 5px 10px;
     cursor: pointer;
+}
+
+/* Status Sidebar */
+.footer-status-bar {
+    background-color: #f0f0f0;
+    padding: 5px 10px;
+    border-top: 1px solid #ccc;
+    font-size: 14px;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+}
+
+.footer-status-bar span {
+    margin-right: 5px;
+}
+
+.footer-status-bar span:last-child {
+    margin-right: 0;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    background-color: green;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+.status-text {
+    color: #333;
 }

@@ -1,0 +1,135 @@
+#log-area {
+    background-color: #1e1e1e;
+    padding: 10px;
+    max-height: 500px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+}
+
+.ansi-black {
+    color: #000000;
+}
+
+.ansi-red {
+    color: #ff0000;
+}
+
+.ansi-green {
+    color: #00ff00;
+}
+
+.ansi-yellow {
+    color: #ffff00;
+}
+
+.ansi-blue {
+    color: #0000ff;
+}
+
+.ansi-magenta {
+    color: #ff00ff;
+}
+
+.ansi-cyan {
+    color: #00ffff;
+}
+
+.ansi-white {
+    color: #ffffff;
+}
+
+.ansi-bright-black {
+    color: #808080;
+}
+
+.ansi-bright-red {
+    color: #ff5555;
+}
+
+.ansi-bright-green {
+    color: #55ff55;
+}
+
+.ansi-bright-yellow {
+    color: #ffff55;
+}
+
+.ansi-bright-blue {
+    color: #5555ff;
+}
+
+.ansi-bright-magenta {
+    color: #ff55ff;
+}
+
+.ansi-bright-cyan {
+    color: #55ffff;
+}
+
+.ansi-bright-white {
+    color: #ffffff;
+}
+
+.ansi-bg-black {
+    background-color: #000000;
+}
+
+.ansi-bg-red {
+    background-color: #ff0000;
+}
+
+.ansi-bg-green {
+    background-color: #00ff00;
+}
+
+.ansi-bg-yellow {
+    background-color: #ffff00;
+}
+
+.ansi-bg-blue {
+    background-color: #0000ff;
+}
+
+.ansi-bg-magenta {
+    background-color: #ff00ff;
+}
+
+.ansi-bg-cyan {
+    background-color: #00ffff;
+}
+
+.ansi-bg-white {
+    background-color: #ffffff;
+}
+
+.ansi-bg-bright-black {
+    background-color: #808080;
+}
+
+.ansi-bg-bright-red {
+    background-color: #ff5555;
+}
+
+.ansi-bg-bright-green {
+    background-color: #55ff55;
+}
+
+.ansi-bg-bright-yellow {
+    background-color: #ffff55;
+}
+
+.ansi-bg-bright-blue {
+    background-color: #5555ff;
+}
+
+.ansi-bg-bright-magenta {
+    background-color: #ff55ff;
+}
+
+.ansi-bg-bright-cyan {
+    background-color: #55ffff;
+}
+
+.ansi-bg-bright-white {
+    background-color: #ffffff;
+}

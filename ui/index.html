@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- <link rel="stylesheet" type="text/css" href="./assets/vanilla-framework-version-4.21.0.min.css" /> -->
     <link rel="stylesheet" href="./assets/custom.css">
+    <link rel="stylesheet" href="./assets/colorization.css">
 </head>
 
 <body>
@@ -13,9 +14,20 @@
         <div class="header">
             <input type="text" id="mr-url" placeholder="Enter GitLab Merge Request URL">
             <button id="send-btn" onclick="send_mr()">Send</button>
+            <button onclick="setOffline()">Set Offline</button>
+            <button onclick="setOnline()">Set Online</button>
             <div class="config-icon" id="config-icon">⚙️</div>
         </div>
-        <div class="log-area" id="log-area"></div>
+        <!-- Log Area -->
+        <div class="log-area mono-font" id="log-area"></div>
+        <!-- Status Bar -->
+        <!-- <div class="footer-status-bar" id="footer-status-bar">
+            Online Clients: <span id="online-clients">0</span>
+        </div> -->
+        <div class="footer-status-bar" id="footer-status-bar">
+            <span class="status-dot"></span>
+            <span class="status-text">Online</span>
+        </div>
     </div>
 
     <!-- Configuration Dialog -->
@@ -29,15 +41,17 @@
         </div>
     </div>
 
+    <script type="text/javascript" src="./assets/colorization.js"></script>
+    <script type="text/javascript" src="./assets/status_bar.js"></script>
     <script>
-        // const sendBtn = document.getElementById('send-btn');
-        // const configIcon = document.getElementById('config-icon');
-        // const configDialog = document.getElementById('config-dialog');
-        // const closeBtn = document.getElementById('close-btn');
-        // const saveTokenBtn = document.getElementById('save-token');
-        // const logArea = document.getElementById('log-area');
+        const sendBtn = document.getElementById('send-btn');
+        const configIcon = document.getElementById('config-icon');
+        const configDialog = document.getElementById('config-dialog');
+        const closeBtn = document.getElementById('close-btn');
+        const saveTokenBtn = document.getElementById('save-token');
+        const logArea = document.getElementById('log-area');
         const mrUrlInput = document.getElementById('mr-url');
-        // const apiTokenInput = document.getElementById('api-token');
+        const apiTokenInput = document.getElementById('api-token');
 
         // // 打开配置对话框
         // configIcon.addEventListener('click', () => {
@@ -58,39 +72,34 @@
         // });
 
         // Tauti
-        const { window: tauriWindow } = window.__TAURI__;
         const invoke = window.__TAURI__.core.invoke;
-        // const listen = window.__TAURI__.event.listen;
+        const listen = window.__TAURI__.event.listen;
+
+        function init_tauri() {
+            listen('rust_log_stream', log_content => {
+                // logArea.innerHTML += `<div>${log_content.payload}</div>`;
+                // console.log(log_content);
+                addLog(log_content.payload);
+            });
+        }
 
         // 发送 Merge Request URL
         async function send_mr() {
             const url = mrUrlInput.value;
             if (url) {
-                // try {
-                // 调用 Tauri 的 invoke 方法发送 URL
-                const response = await invoke('process_mr', { url });
-                logArea.innerHTML += `<div>${response}</div>`;
-                // } catch (error) {
-                // logArea.innerHTML += `<div style="color: red;">Error: ${error.message}</div>`;
-                // }
+                try {
+                    await invoke('request_merge_approval', { url });
+                } catch (error) {
+                    logArea.innerHTML += `<div style="color: red;">Error: ${error.message}</div>`;
+                }
             } else {
                 logArea.innerHTML += `<div style="color: red;">Please enter a valid URL</div>`;
             }
         }
-        // sendBtn.addEventListener('click', async () => {
-        //     const url = mrUrlInput.value;
-        //     if (url) {
-        //         try {
-        //             // 调用 Tauri 的 invoke 方法发送 URL
-        //             const response = await invoke('process_mr', { url });
-        //             logArea.innerHTML += `<div>${response}</div>`;
-        //         } catch (error) {
-        //             logArea.innerHTML += `<div style="color: red;">Error: ${error.message}</div>`;
-        //         }
-        //     } else {
-        //         logArea.innerHTML += `<div style="color: red;">Please enter a valid URL</div>`;
-        //     }
-        // }); 
+
+        init_tauri();
+
+        invoke('push_log');
     </script>
 </body>
 
