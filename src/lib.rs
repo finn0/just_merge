@@ -8,10 +8,10 @@ mod tray;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // Static Plugins
-        // Invoke Handler
+        // - Static Plugins
+        // - Invoke Handler
         .invoke_handler(tauri::generate_handler![push_log, request_merge_approval])
-        // Window Event Override
+        // - Window Event Override
         .on_window_event(|window, event| {
             // > 1. Only hide `main` window.
             // > 2. todo: will panic if `cmd+w`
@@ -22,7 +22,7 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        // Setups
+        // - Dynamic Setups
         .setup(|app| {
             // 1. Tray menu
             #[cfg(target_os = "macos")]
@@ -36,7 +36,7 @@ pub fn run() {
             let app_data = AppData::new(tx.clone(), rx);
             app.manage(RwLock::const_new(app_data));
 
-            // 3. Logs
+            // 3. Logs and log stream
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::new()
@@ -79,7 +79,7 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-// State Management
+// === State Management
 struct AppData {
     _tx: Sender<String>,
     rx: Receiver<String>,
@@ -96,7 +96,7 @@ impl AppData {
     }
 }
 
-// Call Frontend from Rust
+// === Call Frontend from Rust
 
 #[tauri::command]
 async fn push_log(app: AppHandle) {
@@ -121,11 +121,10 @@ async fn push_log(app: AppHandle) {
     }
 }
 
-// Call Rust from the Frontend
+// === Call Rust from the Frontend
 
 #[tauri::command]
 fn request_merge_approval(url: String) {
-    // Send into to pubsub and wait, return online clinets?
     debug!("{}", url);
     info!("{}", url);
     warn!("{}", url);
