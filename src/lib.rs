@@ -3,6 +3,7 @@ use inline_colorization::{color_bright_black, color_green, color_red, color_rese
 use log::{debug, error, info, warn, Level};
 use tauri::{async_runtime::RwLock, AppHandle, Emitter, Manager, WindowEvent};
 
+mod pubsub;
 mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -130,33 +131,3 @@ fn request_merge_approval(url: String) {
     warn!("{}", url);
     error!("{}", url);
 }
-
-// Events
-// mr - merge request, every user should subscribe
-
-// Patterns
-// mr.res.$uid.* - merge request approval result -> mr.res.A.pid1.mid1
-
-// Tips
-// > you could get online users from `pubsub numsum mr` - 1 (yourself)
-// > http://doc.redisfans.com/pub_sub/index.html
-// > the distributed lock for limiting concurrent approvers.
-
-// === PubSub
-
-// User A
-// 0. Subscribe mr.req
-//    PSubscribe mr.res.$uid.*
-// 1. if online users > 0, Publish mr.req {uid:"A",mid:"group_1/project_1",pid:"1102"}
-// 2.
-
-// User B
-// 0. Subscribe mr
-// 1. Read message {uid:"A",pid:"group_1/project_1",mid:"1102"} from `mr`
-// 2. Approve request, Publish mr.res.A.B - {uid:"A",mid:"group_1/project_1",pid:"1102",approver:"B"}
-
-// User C
-// 0. Subscribe mr
-
-// User C - senior approver
-// 0. Subscribe mr
