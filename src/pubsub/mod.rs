@@ -55,24 +55,18 @@ impl PubSub for RedisAgent {
 // > http://doc.redisfans.com/pub_sub/index.html
 // > the distributed lock for limiting concurrent requests.
 
-// Initialization of a user
+// * Initialization of a user
 // 1. Subscribe mr
+//      > to get approval request from others
+//      > to show online member count
 // 2. PSubscribe mr.res.$uid
+//      > to get the details of an approval request
 
 // Action
 // User A
-// 0. Subscribe mr
-//    PSubscribe mr.res.$uid.*
 // 1. if online users > 0, Publish mr.req {uid:"A",mid:"group_1/project_1",pid:"1102"}
 // 2.
 
 // User B
-// 0. Subscribe mr
 // 1. Read message {uid:"A",pid:"group_1/project_1",mid:"1102"} from `mr`
 // 2. Approve request, Publish mr.res.A.B - {uid:"A",mid:"group_1/project_1",pid:"1102",approver:"B"}
-
-// User C
-// 0. Subscribe mr
-
-// User C - senior approver
-// 0. Subscribe mr
