@@ -1,3 +1,8 @@
+use std::time::Duration;
+
+use redis::aio::{ConnectionManager, ConnectionManagerConfig};
+use tokio::sync::OnceCell;
+
 pub trait PubSub {
     // Subscribe approval request from others
     async fn sub_approval_request(&self);
@@ -12,18 +17,16 @@ pub trait PubSub {
     async fn sub_approval_result(&self);
 }
 
-pub struct RedisAgent {}
+type RedisResult<T> = Result<T, redis::RedisError>;
 
-impl RedisAgent {
-    async fn init(&self) {
-        self.sub_approval_request().await;
-        self.sub_approval_result().await;
-    }
+struct RedisAgent {
+    inner: redis::Client,
+    once: OnceCell<ConnectionManager>,
 }
 
 impl PubSub for RedisAgent {
+    // SUBSCRIBE mr
     async fn sub_approval_request(&self) {
-        // SUBSCRIBE mr
         todo!()
     }
 
@@ -39,7 +42,34 @@ impl PubSub for RedisAgent {
 
     async fn sub_approval_result(&self) {
         // PSUBSCRIBE mr.res.$uid.*
+        let x = self.get_async_connection().await.unwrap();
+
+        self.subscribe("ha").await;
+
         todo!()
+    }
+}
+
+impl RedisAgent {
+    async fn init(&self) {
+        self.sub_approval_request().await;
+        self.sub_approval_result().await;
+    }
+
+    async fn subscribe(&self, topic: impl AsRef<str>) {}
+
+    async fn get_async_connection(&self) -> RedisResult<redis::aio::ConnectionManager> {
+        Ok(self
+            .once
+            .get_or_try_init(|| {
+                self.inner.get_connection_manager_with_config(
+                    ConnectionManagerConfig::new()
+                        .set_connection_timeout(Duration::from_secs(30))
+                        .set_response_timeout(Duration::from_secs(30)),
+                )
+            })
+            .await?
+            .clone())
     }
 }
 
