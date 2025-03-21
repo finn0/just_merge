@@ -29,5 +29,5 @@ chrono = "0.4"
 inline_colorization = "0.1"
 crossbeam = { version = "0.8", features = [] }
 
-tokio = { version = "1.44", features = ["sync"] }
+tokio = { version = "1.44", features = ["sync", "macros"] }
 redis = { version = "0.29", features = ["tokio-comp", "connection-manager"] }

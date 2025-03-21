@@ -1,7 +1,10 @@
-use crossbeam::channel::{bounded, Receiver, Sender};
+use std::time::{Duration, Instant};
+
+use crossbeam::channel::{bounded, tick, Receiver, Sender};
 use inline_colorization::{color_bright_black, color_green, color_red, color_reset, color_white, color_yellow};
 use log::{debug, error, info, warn, Level};
 use tauri::{async_runtime::RwLock, AppHandle, Emitter, Manager, WindowEvent};
+use tokio::time::sleep;
 
 mod pubsub;
 mod tray;
@@ -11,7 +14,13 @@ pub fn run() {
     tauri::Builder::default()
         // - Static Plugins
         // - Invoke Handler
-        .invoke_handler(tauri::generate_handler![push_log, request_merge_approval])
+        .invoke_handler(tauri::generate_handler![
+            // - call frontend from rust
+            push_log,
+            on_mr_done,
+            // - call rust from frontend
+            request_merge_approval
+        ])
         // - Window Event Override
         .on_window_event(|window, event| {
             // > 1. Only hide `main` window.
@@ -122,12 +131,31 @@ async fn push_log(app: AppHandle) {
     }
 }
 
+#[tauri::command]
+async fn on_mr_done(app: AppHandle) {
+    let then = Instant::now();
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    for _ in 0..10 {
+        ticker.tick().await;
+        let pass = Instant::now().duration_since(then);
+        info!("time passed {:?}", pass);
+    }
+    let result = pubsub::on_sub_result().await;
+
+    app.emit("on_get_approval_request_result", result).unwrap();
+}
+
 // === Call Rust from the Frontend
 
 #[tauri::command]
-fn request_merge_approval(url: String) {
+async fn request_merge_approval(app: AppHandle, url: String) {
     debug!("{}", url);
     info!("{}", url);
     warn!("{}", url);
     error!("{}", url);
+
+    // pub approval request event
+    pubsub::foo().await;
+
+    on_mr_done(app).await;
 }

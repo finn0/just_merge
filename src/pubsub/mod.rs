@@ -1,7 +1,18 @@
-use std::time::Duration;
-
-use redis::aio::{ConnectionManager, ConnectionManagerConfig};
+use log::info;
+use redis::RedisResult;
 use tokio::sync::OnceCell;
+
+mod redis_cli;
+
+pub async fn foo() {
+    info!(r#"PUBLISH mr.req {{uid:"A",mid:"group_1/project_1",pid:"1102"}}"#);
+}
+
+pub async fn on_sub_result() -> String {
+    info!("get result from PSUBSCRIBE mr.res.userA");
+
+    "userB approved group1/project_1/1102".into()
+}
 
 pub trait PubSub {
     // Subscribe approval request from others
@@ -17,60 +28,19 @@ pub trait PubSub {
     async fn sub_approval_result(&self);
 }
 
-type RedisResult<T> = Result<T, redis::RedisError>;
+static CLIENT: OnceCell<redis_cli::Client> = OnceCell::const_new();
 
-struct RedisAgent {
-    inner: redis::Client,
-    once: OnceCell<ConnectionManager>,
+pub fn init(host: &str, port: u16) -> RedisResult<()> {
+    CLIENT
+        .set(redis_cli::Client::new(host, port)?)
+        .map_err(|e| format!("set redis client: {e}"))
+        .expect("init redis failed");
+
+    Ok(())
 }
 
-impl PubSub for RedisAgent {
-    // SUBSCRIBE mr
-    async fn sub_approval_request(&self) {
-        todo!()
-    }
-
-    async fn online_users(&self) {
-        // PUBSUB NUMSUM mr
-        todo!()
-    }
-
-    async fn pub_approval_request(&self) {
-        // PUBLISH mr $uid:$pid:mid
-        todo!()
-    }
-
-    async fn sub_approval_result(&self) {
-        // PSUBSCRIBE mr.res.$uid.*
-        let x = self.get_async_connection().await.unwrap();
-
-        self.subscribe("ha").await;
-
-        todo!()
-    }
-}
-
-impl RedisAgent {
-    async fn init(&self) {
-        self.sub_approval_request().await;
-        self.sub_approval_result().await;
-    }
-
-    async fn subscribe(&self, topic: impl AsRef<str>) {}
-
-    async fn get_async_connection(&self) -> RedisResult<redis::aio::ConnectionManager> {
-        Ok(self
-            .once
-            .get_or_try_init(|| {
-                self.inner.get_connection_manager_with_config(
-                    ConnectionManagerConfig::new()
-                        .set_connection_timeout(Duration::from_secs(30))
-                        .set_response_timeout(Duration::from_secs(30)),
-                )
-            })
-            .await?
-            .clone())
-    }
+pub fn cli() -> &'static redis_cli::Client {
+    CLIENT.get().expect("redis client not initialized")
 }
 
 // ===== Resis =====
@@ -100,3 +70,6 @@ impl RedisAgent {
 // User B
 // 1. Read message {uid:"A",pid:"group_1/project_1",mid:"1102"} from `mr`
 // 2. Approve request, Publish mr.res.A.B - {uid:"A",mid:"group_1/project_1",pid:"1102",approver:"B"}
+
+#[cfg(test)]
+mod tests {}

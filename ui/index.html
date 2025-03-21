@@ -81,9 +81,12 @@
                 // console.log(log_content);
                 addLog(log_content.payload);
             });
+
+            listen('on_get_approval_request_result', ar_result => {
+                addLog(ar_result.payload);
+            });
         }
 
-        // 发送 Merge Request URL
         async function send_mr() {
             const url = mrUrlInput.value;
             if (url) {
