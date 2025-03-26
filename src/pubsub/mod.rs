@@ -1,5 +1,6 @@
-use log::info;
+use log::{error, info};
 use redis::RedisResult;
+use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 mod redis_cli;
@@ -28,19 +29,82 @@ pub trait PubSub {
     async fn sub_approval_result(&self);
 }
 
-static CLIENT: OnceCell<redis_cli::Client> = OnceCell::const_new();
+// > pubsub.init(host, port, callback)
+// > pubsub.cli().online_users()...
 
-pub fn init(host: &str, port: u16) -> RedisResult<()> {
-    CLIENT
-        .set(redis_cli::Client::new(host, port)?)
-        .map_err(|e| format!("set redis client: {e}"))
-        .expect("init redis failed");
-
-    Ok(())
+// The pubsub agent.
+struct Agent {
+    client: redis_cli::Client2,
 }
 
-pub fn cli() -> &'static redis_cli::Client {
-    CLIENT.get().expect("redis client not initialized")
+impl Agent {
+    pub async fn new<F>(host: &str, port: u16, callback: F) -> Self
+    where
+        F: Fn(String) + Send + 'static,
+    {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        tokio::spawn(async move {
+            while let Some(payload) = rx.recv().await {
+                let payload = "payload".to_string();
+                callback(payload);
+            }
+        });
+
+        // let redis_client = redis_cli::Client::new(host, port, tx)
+        //     .inspect_err(|err| error!("init redis client: {}", err))
+        //     .expect("init pubsub agent failed");
+
+        let redis_client = redis_cli::Client2::new(host, port, tx).await.unwrap();
+
+        Agent { client: redis_client }
+    }
+}
+
+static CLIENT: OnceCell<Agent> = OnceCell::const_new();
+
+pub fn init<F>(host: &str, port: u16, callback: F) -> RedisResult<()>
+where
+    F: Fn(String) + Send + 'static,
+{
+    // while let Some(msg) = rx.recv().await {
+    //    callback(msg);
+    // }
+
+    todo!()
+}
+
+pub fn cli() -> &'static Agent {
+    CLIENT.get().expect("pubsub agent not initialized")
+}
+
+// static CLIENT: OnceCell<redis_cli::Client> = OnceCell::const_new();
+
+// pub fn init(host: &str, port: u16, f: Fn) -> RedisResult<()> {
+//     CLIENT
+//         .set(redis_cli::Client::new(host, port)?)
+//         .map_err(|e| format!("set redis client: {e}"))
+//         .expect("init redis failed");
+
+//     Ok(())
+// }
+
+// pub fn cli() -> &'static redis_cli::Client {
+//     CLIENT.get().expect("redis client not initialized")
+// }
+
+#[derive(Debug, Serialize, Deserialize)]
+struct User {
+    name: String,
+    uid: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Approval {
+    requester: User,
+    approver: Option<User>,
+    pid: String,
+    mid: String,
 }
 
 // ===== Resis =====

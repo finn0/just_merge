@@ -81,7 +81,9 @@ pub fn run() {
                 )?;
             }
 
-            // 3. State
+            // 3. pubsub
+
+            // 4. State
 
             Ok(())
         })
