@@ -142,9 +142,8 @@ async fn on_mr_done(app: AppHandle) {
         let pass = Instant::now().duration_since(then);
         info!("time passed {:?}", pass);
     }
-    let result = pubsub::on_sub_result().await;
-
-    app.emit("on_get_approval_request_result", result).unwrap();
+    // let result = pubsub::on_sub_result().await;
+    // app.emit("on_get_approval_request_result", result).unwrap();
 }
 
 // === Call Rust from the Frontend
@@ -157,7 +156,7 @@ async fn request_merge_approval(app: AppHandle, url: String) {
     error!("{}", url);
 
     // pub approval request event
-    pubsub::foo().await;
+    // pubsub::foo().await;
 
     on_mr_done(app).await;
 }

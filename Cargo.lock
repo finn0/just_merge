@@ -104,6 +104,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
+ "thiserror 2.0.12",
  "tokio",
 ]
 

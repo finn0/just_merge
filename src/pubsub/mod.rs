@@ -1,139 +1,182 @@
-use log::{error, info};
-use redis::RedisResult;
+use log::error;
+use redis::{PushInfo, PushKind, RedisError};
 use serde::{Deserialize, Serialize};
-use tokio::sync::OnceCell;
+use thiserror::Error;
+use tokio::sync::{mpsc::UnboundedSender, OnceCell};
 
 mod redis_cli;
 
-pub async fn foo() {
-    info!(r#"PUBLISH mr.req {{uid:"A",mid:"group_1/project_1",pid:"1102"}}"#);
+type ApprovalResult<T> = Result<T, ApprovalError>;
+
+static AGENT: OnceCell<Agent> = OnceCell::const_new();
+
+pub async fn init(host: &str, port: u16, tx: UnboundedSender<Approval>) -> ApprovalResult<()> {
+    let client = Agent::new(host, port, tx).await?;
+
+    AGENT
+        .set(client)
+        .map_err(|err| format!("set redis client: {err}"))
+        .expect("init pubsub agent failed");
+
+    Ok(())
 }
 
-pub async fn on_sub_result() -> String {
-    info!("get result from PSUBSCRIBE mr.res.userA");
-
-    "userB approved group1/project_1/1102".into()
+pub fn cli() -> &'static Agent {
+    AGENT.get().expect("pubsub agent not initialized")
 }
 
 pub trait PubSub {
-    // Subscribe approval request from others
-    async fn sub_approval_request(&self);
+    // Subscribe approval request from others.
+    //
+    // subscribe mr
+    async fn sub_approval_request(&self) -> ApprovalResult<()>;
 
-    // Get online user list
-    async fn online_users(&self);
+    // Get online users count.
+    //
+    // pubsub numsub mr
+    async fn oneline_users(&self) -> ApprovalResult<u32>;
 
-    // Publish your approval request
-    async fn pub_approval_request(&self);
+    // Subscribe to approval results from others.
+    //
+    // psubscribe mr.res.$uid*
+    async fn sub_approval_response(&self, user: &User) -> ApprovalResult<()>;
 
-    // Subscribe the result of your approval request
-    async fn sub_approval_result(&self);
+    // Publish your approval request.
+    //
+    // publish mr approval
+    async fn pub_approval_request(&self, approval: &Approval) -> ApprovalResult<()>;
+
+    // Publish your approval response for others.
+    //
+    // publish mr approval
+    async fn pub_approval_response(&self, approval: &Approval) -> ApprovalResult<()>;
 }
 
-// > pubsub.init(host, port, callback)
-// > pubsub.cli().online_users()...
-
-// The pubsub agent.
 struct Agent {
-    client: redis_cli::Client2,
+    client: redis_cli::Client,
+}
+
+impl PubSub for Agent {
+    async fn sub_approval_request(&self) -> ApprovalResult<()> {
+        self.client.subscribe("mr").await.map_err(ApprovalError::Redis)
+    }
+
+    async fn oneline_users(&self) -> ApprovalResult<u32> {
+        self.client.pubsub_numsub("mr").await.map_err(ApprovalError::Redis)
+    }
+
+    async fn sub_approval_response(&self, user: &User) -> ApprovalResult<()> {
+        self.client
+            .psubscribe(format!("mr.res.{}*", user.id))
+            .await
+            .map_err(ApprovalError::Redis)
+    }
+
+    async fn pub_approval_request(&self, approval: &Approval) -> ApprovalResult<()> {
+        let payload = serde_json::to_string(approval)?;
+
+        self.client.publish("mr", payload).await.map_err(ApprovalError::Redis)
+    }
+
+    async fn pub_approval_response(&self, approval: &Approval) -> ApprovalResult<()> {
+        let uid = &approval.requester.id;
+        let payload = serde_json::to_string(approval)?;
+
+        self.client
+            .publish(format!("mr.res.{}", uid), payload)
+            .await
+            .map_err(ApprovalError::Redis)
+    }
 }
 
 impl Agent {
-    pub async fn new<F>(host: &str, port: u16, callback: F) -> Self
-    where
-        F: Fn(String) + Send + 'static,
-    {
+    async fn new(host: &str, port: u16, tx_approval: UnboundedSender<Approval>) -> ApprovalResult<Agent> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         tokio::spawn(async move {
             while let Some(payload) = rx.recv().await {
-                let payload = "payload".to_string();
-                callback(payload);
+                match Approval::try_from(payload) {
+                    Ok(approval) => {
+                        if let Err(err) = tx_approval.send(approval) {
+                            error!("failed to send approval: {}", err);
+                        }
+                    }
+                    Err(err) => {
+                        println!("err or push type that could be ignored: {}", err);
+                    }
+                }
             }
         });
 
-        // let redis_client = redis_cli::Client::new(host, port, tx)
-        //     .inspect_err(|err| error!("init redis client: {}", err))
-        //     .expect("init pubsub agent failed");
+        let client = redis_cli::Client::new(host, port, tx).await?;
 
-        let redis_client = redis_cli::Client2::new(host, port, tx).await.unwrap();
-
-        Agent { client: redis_client }
+        Ok(Agent { client })
     }
 }
 
-static CLIENT: OnceCell<Agent> = OnceCell::const_new();
+// ==== Errors and Data Structures ====
 
-pub fn init<F>(host: &str, port: u16, callback: F) -> RedisResult<()>
-where
-    F: Fn(String) + Send + 'static,
-{
-    // while let Some(msg) = rx.recv().await {
-    //    callback(msg);
-    // }
+#[derive(Debug, Error)]
+pub enum ApprovalError {
+    #[error("redis error: {0}")]
+    Redis(#[from] RedisError),
 
-    todo!()
+    #[error("invalid push_info kind: {0}")]
+    InvalidPushInfo(String),
+
+    #[error("decode json error: {0}")]
+    JsonDecode(#[from] serde_json::Error),
 }
-
-pub fn cli() -> &'static Agent {
-    CLIENT.get().expect("pubsub agent not initialized")
-}
-
-// static CLIENT: OnceCell<redis_cli::Client> = OnceCell::const_new();
-
-// pub fn init(host: &str, port: u16, f: Fn) -> RedisResult<()> {
-//     CLIENT
-//         .set(redis_cli::Client::new(host, port)?)
-//         .map_err(|e| format!("set redis client: {e}"))
-//         .expect("init redis failed");
-
-//     Ok(())
-// }
-
-// pub fn cli() -> &'static redis_cli::Client {
-//     CLIENT.get().expect("redis client not initialized")
-// }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct User {
+pub struct User {
+    id: String,
     name: String,
-    uid: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Approval {
+pub struct Approval {
     requester: User,
     approver: Option<User>,
     pid: String,
     mid: String,
 }
 
-// ===== Resis =====
+impl TryFrom<PushInfo> for Approval {
+    type Error = ApprovalError;
 
-// Events
-// mr - merge request, every user should subscribe at initialization.
+    fn try_from(value: PushInfo) -> Result<Self, Self::Error> {
+        match value {
+            PushInfo {
+                kind: PushKind::Message | PushKind::PMessage,
+                data,
+            } => {
+                let data = data
+                    .into_iter()
+                    .map(redis::from_owned_redis_value)
+                    .collect::<Result<Vec<String>, RedisError>>()
+                    .map_err(ApprovalError::Redis)?;
 
-// Patterns
-// mr.res.$uid.* - your merge request approval result, subscribe it at initialization.
+                match (value.kind, data.as_slice()) {
+                    // subscribe mr
+                    (PushKind::Message, [channel, payload]) if channel == "mr" => {
+                        serde_json::from_str::<Self>(payload).map_err(ApprovalError::JsonDecode)
+                    }
 
-// Tips
-// > http://doc.redisfans.com/pub_sub/index.html
-// > the distributed lock for limiting concurrent requests.
+                    // psubscribe mr.res.$uid*
+                    (PushKind::PMessage, [wildcard, pattern, payload])
+                        if wildcard.starts_with("mr.res.") && pattern.starts_with("mr.res.") =>
+                    {
+                        serde_json::from_str::<Self>(payload).map_err(ApprovalError::JsonDecode)
+                    }
 
-// * Initialization of a user
-// 1. Subscribe mr
-//      > to get approval request from others
-//      > to show online member count
-// 2. PSubscribe mr.res.$uid
-//      > to get the details of an approval request
-
-// Action
-// User A
-// 1. if online users > 0, Publish mr.req {uid:"A",mid:"group_1/project_1",pid:"1102"}
-// 2.
-
-// User B
-// 1. Read message {uid:"A",pid:"group_1/project_1",mid:"1102"} from `mr`
-// 2. Approve request, Publish mr.res.A.B - {uid:"A",mid:"group_1/project_1",pid:"1102",approver:"B"}
-
-#[cfg(test)]
-mod tests {}
+                    invalid_data => {
+                        error!("invalid push info: {:?}", invalid_data);
+                        Err(ApprovalError::InvalidPushInfo(format!("{:?}", invalid_data)))
+                    }
+                }
+            }
+            _ => Err(ApprovalError::InvalidPushInfo(format!("{:?}", value))),
+        }
+    }
+}

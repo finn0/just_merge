@@ -1,171 +1,81 @@
 use std::time::Duration;
 
-use log::{debug, info};
+use log::debug;
 use redis::{
     aio::{ConnectionManager, ConnectionManagerConfig},
-    AsyncCommands, PushInfo,
+    AsyncCommands, PushInfo, RedisError,
 };
-use tokio::sync::{mpsc::UnboundedSender, OnceCell};
+use tokio::sync::mpsc::UnboundedSender;
 
-use super::PubSub;
+type RedisResult<T> = Result<T, RedisError>;
 
-pub type RedisResult<T> = Result<T, redis::RedisError>;
-
-pub struct Client2 {
-    inner: redis::Client,
+pub struct Client {
     manager: ConnectionManager,
 }
-impl Client2 {
-    pub async fn new(host: &str, port: u16, tx: UnboundedSender<PushInfo>) -> RedisResult<Client2> {
-        let inner = redis::Client::open(format!("redis://{}:{}?protocol=resp3", host, port))?;
-        let _ = inner.get_connection()?; // connectivity test
+
+impl Client {
+    pub async fn new(host: &str, port: u16, tx: UnboundedSender<PushInfo>) -> RedisResult<Client> {
+        let client = redis::Client::open(format!("redis://{}:{}?protocol=resp3", host, port))?;
+        _ = client.get_connection()?;
 
         let config = ConnectionManagerConfig::new()
             .set_connection_timeout(Duration::from_secs(30))
             .set_response_timeout(Duration::from_secs(30))
             .set_push_sender(tx)
-            .set_automatic_resubscription(); // auto re-subscribe after disconnection
+            .set_automatic_resubscription();
 
-        let manager = inner.get_connection_manager_with_config(config).await?;
+        let manager = client.get_connection_manager_with_config(config).await?;
 
-        Ok(Client2 { inner, manager })
+        Ok(Client { manager })
     }
-    async fn subscribe(&self, channel: &str) -> RedisResult<()> {
+
+    pub async fn subscribe<T>(&self, channel: T) -> RedisResult<()>
+    where
+        T: AsRef<str>,
+    {
         let mut conn = self.manager.clone();
 
-        debug!("subscribe channel={}", channel);
+        debug!("[redis][subscribe] {}", channel.as_ref());
 
-        conn.subscribe(channel).await
-    }
-}
-
-pub struct Client {
-    inner: redis::Client,
-    once: OnceCell<ConnectionManager>,
-    tx: UnboundedSender<PushInfo>,
-}
-
-impl PubSub for Client {
-    // SUBSCRIBE mr
-    async fn sub_approval_request(&self) {
-        todo!()
+        conn.subscribe(channel.as_ref()).await
     }
 
-    async fn online_users(&self) {
-        // PUBSUB NUMSUB mr
-        todo!()
+    pub async fn publish<T>(&self, channel: T, msg: String) -> RedisResult<()>
+    where
+        T: AsRef<str>,
+    {
+        let mut conn = self.manager.clone();
+
+        debug!("[redis][publish] {}", channel.as_ref());
+
+        conn.publish(channel.as_ref(), msg).await
     }
 
-    async fn pub_approval_request(&self) {
-        // PUBLISH mr $uid:$pid:mid
-        todo!()
+    pub async fn psubscribe<T>(&self, pattern: T) -> RedisResult<()>
+    where
+        T: AsRef<str>,
+    {
+        let mut conn = self.manager.clone();
+
+        debug!("[redis][psubscribe] {}", pattern.as_ref());
+
+        conn.psubscribe(pattern.as_ref()).await
     }
 
-    async fn sub_approval_result(&self) {
-        // PSUBSCRIBE mr.res.$uid*
-        todo!()
-    }
-}
+    pub async fn pubsub_numsub<T>(&self, channel: T) -> RedisResult<u32>
+    where
+        T: AsRef<str>,
+    {
+        let mut conn = self.manager.clone();
 
-impl Client {
-    pub fn new(host: &str, port: u16, tx: UnboundedSender<PushInfo>) -> RedisResult<Client> {
-        let inner = redis::Client::open(format!("redis://{}:{}?protocol=resp3", host, port))?;
-        let _ = inner.get_connection()?; // connectivity test
+        debug!("[redis][pubsub numsub] {}", channel.as_ref());
 
-        Ok(Client {
-            inner,
-            once: OnceCell::const_new(),
-            tx,
-        })
-    }
+        let (_channel, count): (String, u32) = redis::cmd("PUBSUB")
+            .arg("NUMSUB")
+            .arg(channel.as_ref())
+            .query_async(&mut conn)
+            .await?;
 
-    // AI guides me the way of choosing the type of your parameter.
-    // | Consideration                | Choose `&str`  | Choose `impl AsRef<str>`     |
-    // |------------------------------|----------------|------------------------------|
-    // | Maximum flexibility needed   | ❌             | ✅                            |
-    // | Performance is critical      | ✅             | ❌ (minor overhead)           |
-    // | Only needs `&str` internally | ✅             | ✅ (requires `.as_ref()`)     |
-    // | Public API for libraries     | ❌             | ✅                            |
-    // | Simple internal functions    | ✅             | ❌                            |
-
-    async fn subscribe(&self, channel: &str) -> RedisResult<()> {
-        let mut conn = self.get_async_connection().await?;
-
-        debug!("subscribe channel={}", channel);
-
-        conn.subscribe(channel).await
-    }
-
-    async fn publish(&self, channel: &str, msg: String) -> RedisResult<()> {
-        let mut conn = self.get_async_connection().await?;
-
-        debug!("publish channel={}, msg={}", channel, msg);
-
-        conn.publish(channel, msg).await
-    }
-
-    async fn get_async_connection(&self) -> RedisResult<redis::aio::ConnectionManager> {
-        Ok(self
-            .once
-            .get_or_try_init(|| {
-                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-                tokio::spawn(async move {
-                    while let Some(payload) = rx.recv().await {
-                        info!("recv: {:?}", payload);
-                    }
-                });
-
-                let config = ConnectionManagerConfig::new()
-                    .set_connection_timeout(Duration::from_secs(30))
-                    .set_response_timeout(Duration::from_secs(30))
-                    .set_push_sender(tx)
-                    .set_automatic_resubscription(); // auto re-subscribe after disconnection
-
-                self.inner.get_connection_manager_with_config(config)
-            })
-            .await?
-            .clone())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use redis::{AsyncCommands, RedisResult};
-
-    use crate::pubsub::cli;
-
-    use super::Client;
-
-    // #[tokio::test]
-    // async fn test_connectivity() {
-    //     let client = Client::new("127.0.0.1", 6379).unwrap();
-    //     let mut conn = client.get_async_connection().await.unwrap();
-    //     let _: () = conn.set_ex("foo", "bar", 1).await.unwrap();
-    //     let bar: String = conn.get("foo").await.unwrap();
-    //     assert_eq!(bar, "bar");
-    // }
-
-    #[tokio::test]
-    async fn test_pubsub() -> RedisResult<()> {
-        let client = Client::new("192.168.50.183", 6379)?;
-
-        let topic = "foo";
-
-        client.subscribe(topic).await?;
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        client.publish(topic, "msg 1".to_string()).await?;
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        client.publish(topic, "msg 2".to_string()).await?;
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        Ok(())
+        Ok(count)
     }
 }
