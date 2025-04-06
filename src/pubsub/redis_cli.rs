@@ -5,35 +5,34 @@ use redis::{
     aio::{ConnectionManager, ConnectionManagerConfig},
     AsyncCommands, PushInfo, RedisError,
 };
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{mpsc::UnboundedSender, OnceCell};
 
 type RedisResult<T> = Result<T, RedisError>;
 
 pub struct Client {
-    manager: ConnectionManager,
+    // manager: ConnectionManager,
+    inner: redis::Client,
+    once: OnceCell<ConnectionManager>,
+    tx: UnboundedSender<PushInfo>,
 }
 
 impl Client {
-    pub async fn new(host: &str, port: u16, tx: UnboundedSender<PushInfo>) -> RedisResult<Client> {
+    pub fn new(host: &str, port: u16, tx: UnboundedSender<PushInfo>) -> RedisResult<Client> {
         let client = redis::Client::open(format!("redis://{}:{}?protocol=resp3", host, port))?;
         _ = client.get_connection()?;
 
-        let config = ConnectionManagerConfig::new()
-            .set_connection_timeout(Duration::from_secs(30))
-            .set_response_timeout(Duration::from_secs(30))
-            .set_push_sender(tx)
-            .set_automatic_resubscription();
-
-        let manager = client.get_connection_manager_with_config(config).await?;
-
-        Ok(Client { manager })
+        Ok(Client {
+            inner: client,
+            once: OnceCell::const_new(),
+            tx,
+        })
     }
 
     pub async fn subscribe<T>(&self, channel: T) -> RedisResult<()>
     where
         T: AsRef<str>,
     {
-        let mut conn = self.manager.clone();
+        let mut conn = self.get_manager().await?;
 
         debug!("[redis][subscribe] {}", channel.as_ref());
 
@@ -44,7 +43,7 @@ impl Client {
     where
         T: AsRef<str>,
     {
-        let mut conn = self.manager.clone();
+        let mut conn = self.get_manager().await?;
 
         debug!("[redis][publish] {}", channel.as_ref());
 
@@ -55,7 +54,7 @@ impl Client {
     where
         T: AsRef<str>,
     {
-        let mut conn = self.manager.clone();
+        let mut conn = self.get_manager().await?;
 
         debug!("[redis][psubscribe] {}", pattern.as_ref());
 
@@ -66,7 +65,7 @@ impl Client {
     where
         T: AsRef<str>,
     {
-        let mut conn = self.manager.clone();
+        let mut conn = self.get_manager().await?;
 
         debug!("[redis][pubsub numsub] {}", channel.as_ref());
 
@@ -77,5 +76,23 @@ impl Client {
             .await?;
 
         Ok(count)
+    }
+
+    async fn get_manager(&self) -> RedisResult<ConnectionManager> {
+        let manager = self
+            .once
+            .get_or_try_init(|| {
+                let config = ConnectionManagerConfig::new()
+                    .set_connection_timeout(Duration::from_secs(30))
+                    .set_response_timeout(Duration::from_secs(30))
+                    .set_push_sender(self.tx.clone())
+                    .set_automatic_resubscription();
+
+                self.inner.get_connection_manager_with_config(config)
+            })
+            .await?
+            .clone();
+
+        Ok(manager)
     }
 }

@@ -10,8 +10,10 @@ type ApprovalResult<T> = Result<T, ApprovalError>;
 
 static AGENT: OnceCell<Agent> = OnceCell::const_new();
 
-pub async fn init(host: &str, port: u16, tx: UnboundedSender<Approval>) -> ApprovalResult<()> {
-    let client = Agent::new(host, port, tx).await?;
+// Initialize PubSub agent.
+// Parameter `tx` helps send the approval response.
+pub fn init(host: &str, port: u16, tx: UnboundedSender<Approval>, me: &User) -> ApprovalResult<()> {
+    let client = Agent::new(host, port, tx, me)?;
 
     AGENT
         .set(client)
@@ -48,11 +50,11 @@ pub trait PubSub {
 
     // Publish your approval response for others.
     //
-    // publish mr approval
+    // publish mr.res.$uid approval
     async fn pub_approval_response(&self, approval: &Approval) -> ApprovalResult<()>;
 }
 
-struct Agent {
+pub struct Agent {
     client: redis_cli::Client,
 }
 
@@ -90,13 +92,19 @@ impl PubSub for Agent {
 }
 
 impl Agent {
-    async fn new(host: &str, port: u16, tx_approval: UnboundedSender<Approval>) -> ApprovalResult<Agent> {
+    fn new(host: &str, port: u16, tx_approval: UnboundedSender<Approval>, me: &User) -> ApprovalResult<Agent> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let uid = me.id.clone();
 
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             while let Some(payload) = rx.recv().await {
                 match Approval::try_from(payload) {
                     Ok(approval) => {
+                        // todo: requester is me, approver = None, ignore.
+                        // todo: requester is me, approver is others, send back to tauri.
+                        if approval.requester.id == uid && approval.approver.is_none() {
+                            continue;
+                        }
                         if let Err(err) = tx_approval.send(approval) {
                             error!("failed to send approval: {}", err);
                         }
@@ -108,7 +116,7 @@ impl Agent {
             }
         });
 
-        let client = redis_cli::Client::new(host, port, tx).await?;
+        let client = redis_cli::Client::new(host, port, tx)?;
 
         Ok(Agent { client })
     }
@@ -128,10 +136,10 @@ pub enum ApprovalError {
     JsonDecode(#[from] serde_json::Error),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-    id: String,
-    name: String,
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -178,5 +186,90 @@ impl TryFrom<PushInfo> for Approval {
             }
             _ => Err(ApprovalError::InvalidPushInfo(format!("{:?}", value))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::pubsub::{cli, init, Agent, Approval, PubSub, User};
+
+    #[test]
+    fn test_serde() {
+        let me = User {
+            id: "user001".to_string(),
+            name: "foo".to_string(),
+        };
+        let other = User {
+            id: "user002".to_string(),
+            name: "bar".to_string(),
+        };
+        let approval_response = Approval {
+            requester: me,
+            approver: Some(other),
+            pid: "project/001".to_string(),
+            mid: "merge/001".to_string(),
+        };
+        let x = serde_json::to_string(&approval_response).unwrap();
+        println!("{}", x);
+    }
+
+    #[tokio::test]
+    async fn test_all() {
+        let (tx_approval, mut rx_approval) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(approval) = rx_approval.recv().await {
+                println!("<< recv approval: {:?}", approval);
+            }
+        });
+
+        // init
+        let me = User {
+            id: "001".to_string(),
+            name: "me".to_string(),
+        };
+
+        init("127.0.0.1", 6379, tx_approval, &me).unwrap();
+
+        // init - subscriptions
+        cli().sub_approval_request().await.unwrap();
+        cli().sub_approval_response(&me).await.unwrap();
+        let online_users = cli().oneline_users().await.unwrap();
+        assert_eq!(1, online_users);
+
+        // publish approval request
+        let approval_request = Approval {
+            requester: me.clone(),
+            approver: None,
+            pid: "project/001".to_string(),
+            mid: "merge/001".to_string(),
+        };
+        cli().pub_approval_request(&approval_request).await.unwrap();
+
+        // foo publish approval response
+        let foo = User {
+            id: "002".to_string(),
+            name: "foo".to_string(),
+        };
+        let approval_response_of_foo = Approval {
+            requester: me,
+            approver: Some(foo.clone()),
+            pid: "project/001".to_string(),
+            mid: "merge/001".to_string(),
+        };
+        let (tx_approval, mut _rx_approval) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(approval) = _rx_approval.recv().await {
+                println!("<< foo recv approval: {:?}", approval);
+            }
+        });
+        let agent_foo = Agent::new("127.0.0.1", 6379, tx_approval, &foo).unwrap();
+        agent_foo
+            .pub_approval_response(&approval_response_of_foo)
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
