@@ -3,7 +3,7 @@ use std::time::Duration;
 use log::debug;
 use redis::{
     aio::{ConnectionManager, ConnectionManagerConfig},
-    AsyncCommands, PushInfo, RedisError,
+    AsyncCommands, PushInfo, RedisError, Script,
 };
 use tokio::sync::{mpsc::UnboundedSender, OnceCell};
 
@@ -78,7 +78,27 @@ impl Client {
         Ok(count)
     }
 
-    async fn get_manager(&self) -> RedisResult<ConnectionManager> {
+    // the semaphore lock should be applied on each approval request.
+    // mr.lock.$pid.$mid
+    async fn acquire_semaphore_lock(&self, key: &str) -> RedisResult<bool> {
+        let mut conn = self.get_manager().await?;
+
+        debug!("[redis][semaphore script] {}", key);
+
+        let script = Script::new(SEMAPHORE_SCRIPT);
+        let expire = 10;
+        let concurrency = 3;
+        let result: i32 = script
+            .key(key)
+            .arg(expire)
+            .arg(concurrency)
+            .invoke_async(&mut conn)
+            .await?;
+
+        Ok(result == 1)
+    }
+
+    pub async fn get_manager(&self) -> RedisResult<ConnectionManager> {
         let manager = self
             .once
             .get_or_try_init(|| {
@@ -94,5 +114,41 @@ impl Client {
             .clone();
 
         Ok(manager)
+    }
+}
+
+const SEMAPHORE_SCRIPT: &str = r#"
+    local current = redis.call('get', KEYS[1])
+    if not current then
+        redis.call('set', KEYS[1], 1, 'EX', ARGV[1])
+        return 1
+    elseif tonumber(current) < tonumber(ARGV[2]) then
+        redis.call('incr', KEYS[1])
+        redis.call('expire', KEYS[1], ARGV[1])
+        return 1
+    else
+        return 0
+    end
+"#;
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::pubsub::redis_cli::Client;
+
+    #[tokio::test]
+    async fn test_semaphone_lock() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let cli = Client::new("127.0.0.1", 6379, tx).unwrap();
+        let key = "mr.lock.p1.m1";
+
+        for i in 0..4 {
+            let acquired = cli.acquire_semaphore_lock(key).await.unwrap();
+            let expected = i != 3;
+            assert_eq!(expected, acquired);
+        }
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert!(cli.acquire_semaphore_lock(key).await.unwrap());
     }
 }

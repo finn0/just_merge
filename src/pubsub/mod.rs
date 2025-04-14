@@ -272,4 +272,22 @@ mod tests {
 
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
+
+    #[tokio::test]
+    async fn test_semaphore_lock() {
+        let (tx_approval, mut rx_approval) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(approval) = rx_approval.recv().await {
+                println!("<< recv approval: {:?}", approval);
+            }
+        });
+
+        // init
+        let me = User {
+            id: "001".to_string(),
+            name: "me".to_string(),
+        };
+
+        init("127.0.0.1", 6379, tx_approval, &me).unwrap();
+    }
 }

@@ -10,6 +10,9 @@ use tauri_plugin_notification::NotificationExt;
 mod pubsub;
 mod tray;
 
+// todo: ask to add to auto startup for mac os
+// todo: update user info from gitlab daily(eg: common user -> security plus memory)
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
