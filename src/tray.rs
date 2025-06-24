@@ -36,7 +36,3 @@ pub fn init_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
 
     Ok(())
 }
-
-// TODO
-// > First time run the app? Show the window and make some configurations.
-// > Collect log into mpsc, and send to main window

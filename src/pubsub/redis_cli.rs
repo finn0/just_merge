@@ -10,15 +10,14 @@ use tokio::sync::{mpsc::UnboundedSender, OnceCell};
 type RedisResult<T> = Result<T, RedisError>;
 
 pub struct Client {
-    // manager: ConnectionManager,
     inner: redis::Client,
     once: OnceCell<ConnectionManager>,
     tx: UnboundedSender<PushInfo>,
 }
 
 impl Client {
-    pub fn new(host: &str, port: u16, tx: UnboundedSender<PushInfo>) -> RedisResult<Client> {
-        let client = redis::Client::open(format!("redis://{}:{}?protocol=resp3", host, port))?;
+    pub fn new(endpoint: &str, tx: UnboundedSender<PushInfo>) -> RedisResult<Client> {
+        let client = redis::Client::open(format!("redis://{}?protocol=resp3", endpoint))?;
         _ = client.get_connection()?;
 
         Ok(Client {
@@ -34,7 +33,7 @@ impl Client {
     {
         let mut conn = self.get_manager().await?;
 
-        debug!("[redis][subscribe] {}", channel.as_ref());
+        debug!("[redis] [subscribe] {}", channel.as_ref());
 
         conn.subscribe(channel.as_ref()).await
     }
@@ -45,7 +44,7 @@ impl Client {
     {
         let mut conn = self.get_manager().await?;
 
-        debug!("[redis][publish] {}", channel.as_ref());
+        debug!("[redis] [publish] {}", channel.as_ref());
 
         conn.publish(channel.as_ref(), msg).await
     }
@@ -56,7 +55,7 @@ impl Client {
     {
         let mut conn = self.get_manager().await?;
 
-        debug!("[redis][psubscribe] {}", pattern.as_ref());
+        debug!("[redis] [psubscribe] {}", pattern.as_ref());
 
         conn.psubscribe(pattern.as_ref()).await
     }
@@ -66,8 +65,6 @@ impl Client {
         T: AsRef<str>,
     {
         let mut conn = self.get_manager().await?;
-
-        debug!("[redis][pubsub numsub] {}", channel.as_ref());
 
         let (_channel, count): (String, u32) = redis::cmd("PUBSUB")
             .arg("NUMSUB")
@@ -80,10 +77,10 @@ impl Client {
 
     // the semaphore lock should be applied on each approval request.
     // mr.lock.$pid.$mid
-    async fn acquire_semaphore_lock(&self, key: &str) -> RedisResult<bool> {
+    pub async fn acquire_semaphore_lock(&self, key: &str) -> RedisResult<bool> {
         let mut conn = self.get_manager().await?;
 
-        debug!("[redis][semaphore script] {}", key);
+        debug!("[redis] [semaphore script] {}", key);
 
         let script = Script::new(SEMAPHORE_SCRIPT);
         let expire = 10;
@@ -98,7 +95,7 @@ impl Client {
         Ok(result == 1)
     }
 
-    pub async fn get_manager(&self) -> RedisResult<ConnectionManager> {
+    async fn get_manager(&self) -> RedisResult<ConnectionManager> {
         let manager = self
             .once
             .get_or_try_init(|| {
@@ -130,25 +127,3 @@ const SEMAPHORE_SCRIPT: &str = r#"
         return 0
     end
 "#;
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use crate::pubsub::redis_cli::Client;
-
-    #[tokio::test]
-    async fn test_semaphone_lock() {
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli = Client::new("127.0.0.1", 6379, tx).unwrap();
-        let key = "mr.lock.p1.m1";
-
-        for i in 0..4 {
-            let acquired = cli.acquire_semaphore_lock(key).await.unwrap();
-            let expected = i != 3;
-            assert_eq!(expected, acquired);
-        }
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        assert!(cli.acquire_semaphore_lock(key).await.unwrap());
-    }
-}

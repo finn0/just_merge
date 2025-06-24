@@ -8,6 +8,9 @@
   "permissions": [
     "core:default",
     "log:default",
-    "notification:default"
+    "notification:default",
+    "store:default",
+    "shell:allow-execute",
+    "shell:allow-open"
   ]
 }

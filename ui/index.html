@@ -4,105 +4,201 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- <link rel="stylesheet" type="text/css" href="./assets/vanilla-framework-version-4.21.0.min.css" /> -->
     <link rel="stylesheet" href="./assets/custom.css">
     <link rel="stylesheet" href="./assets/colorization.css">
+    <link rel="stylesheet" href="./assets/popup.css">
 </head>
 
 <body>
     <div class="container">
         <div class="header">
             <input type="text" id="mr-url" placeholder="Enter GitLab Merge Request URL">
-            <button id="send-btn" onclick="send_mr()">Send</button>
-            <button onclick="setOffline()">Set Offline</button>
-            <button onclick="setOnline()">Set Online</button>
-            <div class="config-icon" id="config-icon">⚙️</div>
         </div>
         <!-- Log Area -->
         <div class="log-area mono-font" id="log-area"></div>
         <!-- Status Bar -->
-        <!-- <div class="footer-status-bar" id="footer-status-bar">
-            Online Clients: <span id="online-clients">0</span>
-        </div> -->
         <div class="footer-status-bar" id="footer-status-bar">
             <span class="status-dot"></span>
-            <span class="status-text">Online</span>
+            <span class="status-text">Online Users: <span id="online-clients">0</span></span>
         </div>
     </div>
 
-    <!-- Configuration Dialog -->
-    <div id="config-dialog" class="config-dialog">
-        <div class="config-content">
-            <span class="close-btn" id="close-btn">&times;</span>
-            <h2>Configuration</h2>
-            <label for="api-token">GitLab API Access Token:</label>
-            <input type="text" id="api-token" placeholder="Enter your GitLab API Access Token">
-            <button id="save-token">Save</button>
+    <!-- Gitlab Dialog -->
+    <div id="popup-overlay"></div>
+    <div id="popup-dialog">
+        <div class="form-group">
+            <label for="domain">GitLab Domain</label>
+            <input type="text" id="domain" placeholder="git.zoom.us">
         </div>
+        <div class="form-group">
+            <label for="token">
+                Access Token
+                <a onclick="openHelpPage()" href="https://docs.gitlab.com/user/profile/personal_access_tokens" target="_blank" class="help-icon" title="click for help">❓</a>
+            </label>
+            <input type="text" id="token">
+        </div>
+
+        <div class="form-group">
+            <label for="redis">
+                Public Redis As DB
+                <input type="text" id="redis" placeholder="e.g. 192.168.1.100:6379">
+            </label>
+        </div>
+
+        <button onclick="confirmInput()">Confirm</button>
     </div>
 
     <script type="text/javascript" src="./assets/colorization.js"></script>
     <script type="text/javascript" src="./assets/status_bar.js"></script>
     <script>
         const sendBtn = document.getElementById('send-btn');
-        const configIcon = document.getElementById('config-icon');
-        const configDialog = document.getElementById('config-dialog');
-        const closeBtn = document.getElementById('close-btn');
-        const saveTokenBtn = document.getElementById('save-token');
         const logArea = document.getElementById('log-area');
         const mrUrlInput = document.getElementById('mr-url');
-        const apiTokenInput = document.getElementById('api-token');
-
-        // // 打开配置对话框
-        // configIcon.addEventListener('click', () => {
-        //     configDialog.style.display = 'block';
-        // });
-
-        // // 关闭配置对话框
-        // closeBtn.addEventListener('click', () => {
-        //     configDialog.style.display = 'none';
-        // });
-
-        // // 保存 API Token
-        // saveTokenBtn.addEventListener('click', () => {
-        //     const token = apiTokenInput.value;
-        //     // 这里可以调用 Tauri 的 invoke 方法保存 token
-        //     console.log('Token saved:', token);
-        //     configDialog.style.display = 'none';
-        // });
 
         // Tauti
         const invoke = window.__TAURI__.core.invoke;
         const listen = window.__TAURI__.event.listen;
+        const { load } = window.__TAURI__.store;
+        const { isPermissionGranted, requestPermission, sendNotification, } = window.__TAURI__.notification;
 
+        // Store keys
+        const gitlab_domain_key = 'gitlab-domain';
+        const gitlab_access_token_key = 'gitlab-access-token';
+        const redis_endpoint_key = 'redis-endpoint';
+
+        // Listen Rust calls
         function init_tauri() {
             listen('rust_log_stream', log_content => {
-                // logArea.innerHTML += `<div>${log_content.payload}</div>`;
-                // console.log(log_content);
                 addLog(log_content.payload);
             });
 
-            listen('on_get_approval_request_result', ar_result => {
-                addLog(ar_result.payload);
+            listen('update_online_user_count', count => {
+                setOnlineClientCount(count.payload);
             });
         }
 
+        // Button action - click button 'Send'
         async function send_mr() {
             const url = mrUrlInput.value;
             if (url) {
-                try {
-                    await invoke('request_merge_approval', { url });
-                } catch (error) {
-                    logArea.innerHTML += `<div style="color: red;">Error: ${error.message}</div>`;
-                }
+                await invoke('request_merge_approval', { url });
             } else {
                 logArea.innerHTML += `<div style="color: red;">Please enter a valid URL</div>`;
             }
         }
 
+        // === store gitlab domain and access token
+
+        async function get_store() {
+            const store_config = await invoke('filename');
+            console.log("store configuration file is ", store_config);
+            const store = await load(store_config, { autoSave: false });
+            return store;
+        }
+
+        async function openHelpPage() {
+            const { Command } = window.__TAURI__.shell;
+            await Command.create('open', ['https://docs.gitlab.com/user/profile/personal_access_tokens']).execute();
+        }
+        function showDialog() {
+            const overlay = document.getElementById("popup-overlay");
+            const dialog = document.getElementById("popup-dialog");
+            overlay.style.display = "block";
+            dialog.style.display = "block";
+
+            ["domain", "token", "redis"].forEach(id => {
+                const input = document.getElementById(id);
+                input.classList.remove("error");
+            });
+        }
+        function hideDialog() {
+            document.getElementById("popup-overlay").style.display = "none";
+            document.getElementById("popup-dialog").style.display = "none";
+        }
+        async function confirmInput() {
+            const domainInput = document.getElementById("domain");
+            const tokenInput = document.getElementById("token");
+            const redisInput = document.getElementById("redis");
+
+            let domain = domainInput.value.trim();
+            let token = tokenInput.value.trim();
+            let redis = redisInput.value.trim();
+
+            if (domain == "") {
+                domain = domainInput.placeholder.trim();
+            }
+
+            let hasError = false;
+
+            // domain input validation
+            if (!domain) {
+                domainInput.classList.add("error");
+                domainInput.placeholder = "Please Input GitLab Domain";
+                hasError = true;
+            } else {
+                domainInput.classList.remove("error");
+            }
+
+            // token input validation
+            if (!token) {
+                tokenInput.classList.add("error");
+                tokenInput.placeholder = "Please Input Access Token";
+                hasError = true;
+            } else {
+                tokenInput.classList.remove("error");
+            }
+
+            // redis input validation
+            if (!redis) {
+                tokenInput.classList.add("error");
+                tokenInput.placeholder = "Please Input Redis Endpoint";
+                hasError = true;
+            } else {
+                redisInput.classList.remove("error");
+            }
+
+            if (hasError) return;
+
+            hideDialog();
+
+            console.log("GitLab Domain:", domain);
+            console.log("Access Token:", token);
+            console.log("Redis:", redis);
+
+            const store = await get_store();
+            await store.set(gitlab_domain_key, domain);
+            await store.set(gitlab_access_token_key, token);
+            await store.set(redis_endpoint_key, redis);
+            await store.save();
+
+            init_modules();
+        }
+
+        // Lazy init non-tauri modules: gitlab, pubsub, ...
+        async function init_modules() {
+            const store = await get_store();
+
+            let gitlab_domain = await store.get(gitlab_domain_key);
+            let access_token = await store.get(gitlab_access_token_key);
+            let redis_endpoint = await store.get(redis_endpoint_key);
+            if (!gitlab_domain || !access_token || !redis_endpoint) {
+                showDialog();
+                return;
+            }
+
+            // call rust
+            await invoke('init_modules', { gitlab_domain, access_token, redis_endpoint });
+        }
+
+
+        // 1. init tauri.
         init_tauri();
 
+        // 2. invoke Rust function 'push_log'.
         invoke('push_log');
+
+        // 3. init modules.
+        init_modules();
     </script>
 </body>
 

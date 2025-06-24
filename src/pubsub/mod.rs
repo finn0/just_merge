@@ -1,21 +1,27 @@
-use log::error;
+use std::{ops::Deref, sync::Arc};
+
+use gitlab::User;
+use log::{error, info, warn};
 use redis::{PushInfo, PushKind, RedisError};
 use serde::{Deserialize, Serialize};
+use tauri::AppHandle;
+use tauri_plugin_notification::NotificationExt;
 use thiserror::Error;
 use tokio::sync::{mpsc::UnboundedSender, OnceCell};
 
+pub mod gitlab;
 mod redis_cli;
 
 type ApprovalResult<T> = Result<T, ApprovalError>;
 
-static AGENT: OnceCell<Agent> = OnceCell::const_new();
+static REDIS_AGENT: OnceCell<Agent> = OnceCell::const_new();
 
 // Initialize PubSub agent.
-// Parameter `tx` helps send the approval response.
-pub fn init(host: &str, port: u16, tx: UnboundedSender<Approval>, me: &User) -> ApprovalResult<()> {
-    let client = Agent::new(host, port, tx, me)?;
+// Parameter 'tx' helps send the approval response.
+pub fn init(endpoint: &str, tx: UnboundedSender<Approval>, me: User) -> ApprovalResult<()> {
+    let client = Agent::new(endpoint, tx, Arc::new(me))?;
 
-    AGENT
+    REDIS_AGENT
         .set(client)
         .map_err(|err| format!("set redis client: {err}"))
         .expect("init pubsub agent failed");
@@ -24,7 +30,7 @@ pub fn init(host: &str, port: u16, tx: UnboundedSender<Approval>, me: &User) -> 
 }
 
 pub fn cli() -> &'static Agent {
-    AGENT.get().expect("pubsub agent not initialized")
+    REDIS_AGENT.get().expect("pubsub agent not initialized")
 }
 
 pub trait PubSub {
@@ -35,8 +41,8 @@ pub trait PubSub {
 
     // Get online users count.
     //
-    // pubsub numsub mr
-    async fn oneline_users(&self) -> ApprovalResult<u32>;
+    // pubsub number mr
+    async fn online_users(&self) -> ApprovalResult<u32>;
 
     // Subscribe to approval results from others.
     //
@@ -48,10 +54,12 @@ pub trait PubSub {
     // publish mr approval
     async fn pub_approval_request(&self, approval: &Approval) -> ApprovalResult<()>;
 
-    // Publish your approval response for others.
+    // Publish your approval response to the requester.
     //
     // publish mr.res.$uid approval
     async fn pub_approval_response(&self, approval: &Approval) -> ApprovalResult<()>;
+
+    async fn acquire_semaphore_lock(&self, approval: &Approval) -> ApprovalResult<bool>;
 }
 
 pub struct Agent {
@@ -60,24 +68,24 @@ pub struct Agent {
 
 impl PubSub for Agent {
     async fn sub_approval_request(&self) -> ApprovalResult<()> {
-        self.client.subscribe("mr").await.map_err(ApprovalError::Redis)
+        self.client.subscribe("mr").await.map_err(Into::into)
     }
 
-    async fn oneline_users(&self) -> ApprovalResult<u32> {
-        self.client.pubsub_numsub("mr").await.map_err(ApprovalError::Redis)
+    async fn online_users(&self) -> ApprovalResult<u32> {
+        self.client.pubsub_numsub("mr").await.map_err(Into::into)
     }
 
     async fn sub_approval_response(&self, user: &User) -> ApprovalResult<()> {
         self.client
             .psubscribe(format!("mr.res.{}*", user.id))
             .await
-            .map_err(ApprovalError::Redis)
+            .map_err(Into::into)
     }
 
     async fn pub_approval_request(&self, approval: &Approval) -> ApprovalResult<()> {
         let payload = serde_json::to_string(approval)?;
 
-        self.client.publish("mr", payload).await.map_err(ApprovalError::Redis)
+        self.client.publish("mr", payload).await.map_err(Into::into)
     }
 
     async fn pub_approval_response(&self, approval: &Approval) -> ApprovalResult<()> {
@@ -87,26 +95,64 @@ impl PubSub for Agent {
         self.client
             .publish(format!("mr.res.{}", uid), payload)
             .await
-            .map_err(ApprovalError::Redis)
+            .map_err(Into::into)
+    }
+
+    async fn acquire_semaphore_lock(&self, approval: &Approval) -> ApprovalResult<bool> {
+        let key = format!("mr.lock.{}.{}", &approval.pid, approval.mid);
+
+        self.client.acquire_semaphore_lock(&key).await.map_err(Into::into)
     }
 }
 
 impl Agent {
-    fn new(host: &str, port: u16, tx_approval: UnboundedSender<Approval>, me: &User) -> ApprovalResult<Agent> {
+    fn new(endpoint: &str, tx_approval: UnboundedSender<Approval>, me: Arc<User>) -> ApprovalResult<Self> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let uid = me.id.clone();
+        let me = me.clone();
 
+        // block reading approval request/response from others.
         tauri::async_runtime::spawn(async move {
             while let Some(payload) = rx.recv().await {
                 match Approval::try_from(payload) {
-                    Ok(approval) => {
-                        // todo: requester is me, approver = None, ignore.
-                        // todo: requester is me, approver is others, send back to tauri.
-                        if approval.requester.id == uid && approval.approver.is_none() {
-                            continue;
-                        }
+                    // 1. ignore your own approval request
+                    Ok(approval) if approval.is_requested_by_yourself(me.id) => {}
+
+                    // 2. send approval response to tauri frontend(psub mr.res.$uid*)
+                    Ok(approval) if approval.is_response() => {
                         if let Err(err) = tx_approval.send(approval) {
-                            error!("failed to send approval: {}", err);
+                            error!("failed to send approval to tauri frontend: {}", err);
+                        }
+                    }
+
+                    // 3. process approval request
+                    Ok(mut approval) => {
+                        // 1. try to get semaphore lock
+                        match cli().acquire_semaphore_lock(&approval).await {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                warn!("failed to acquire semaphore lock, good luck next time.");
+                                continue;
+                            }
+                            Err(err) => {
+                                error!("failed to acquire semaphore lock: {}", err);
+                                continue;
+                            }
+                        };
+
+                        // 2. approval request
+                        if approval.approver.is_none() {
+                            info!("{}", approval.request_details);
+                            if let Err(err) = gitlab::cli().approve_merge_request(&approval).await {
+                                error!("failed to approve merge request: {}", err);
+                                approval.fail_reason = Some(err.to_string());
+                            }
+
+                            approval.approver = Some(me.clone().deref().to_owned());
+                        }
+
+                        // 3. publish approval response
+                        if let Err(err) = cli().pub_approval_response(&approval).await {
+                            error!("failed to publish approval response: {}", err);
                         }
                     }
                     Err(err) => {
@@ -116,13 +162,11 @@ impl Agent {
             }
         });
 
-        let client = redis_cli::Client::new(host, port, tx)?;
+        let client = redis_cli::Client::new(endpoint, tx)?;
 
         Ok(Agent { client })
     }
 }
-
-// ==== Errors and Data Structures ====
 
 #[derive(Debug, Error)]
 pub enum ApprovalError {
@@ -136,18 +180,65 @@ pub enum ApprovalError {
     JsonDecode(#[from] serde_json::Error),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {
-    pub id: String,
-    pub name: String,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Approval {
     requester: User,
     approver: Option<User>,
     pid: String,
-    mid: String,
+    mid: u64,
+    request_details: String,
+    fail_reason: Option<String>,
+}
+
+impl Approval {
+    pub fn new_request(me: User, pid: String, mid: u64, mr_details: String) -> Self {
+        Self {
+            requester: me,
+            approver: None,
+            pid,
+            mid,
+            request_details: mr_details,
+            fail_reason: None,
+        }
+    }
+
+    pub fn show_response_details(&self, app: &AppHandle) {
+        let approver = match &self.approver {
+            Some(approver) => &approver.name,
+            None => {
+                error!("failed to get approver from {:?}", self);
+                return;
+            }
+        };
+
+        match &self.fail_reason {
+            Some(reason) => {
+                error!(
+                    "[{}] approved {}/{} but failed: {}",
+                    approver, self.pid, self.mid, reason
+                );
+            }
+            None => {
+                info!("[{}] approved {}/{}", self.requester.name, self.pid, self.mid);
+            }
+        }
+
+        app.notification()
+            .builder()
+            .title(format!("{}{}", self.pid, self.mid))
+            .body(format!("{} approved your request!", approver))
+            .auto_cancel()
+            .show()
+            .unwrap();
+    }
+
+    fn is_requested_by_yourself(&self, uid: u64) -> bool {
+        self.requester.id == uid && self.approver.is_none()
+    }
+
+    fn is_response(&self) -> bool {
+        self.approver.is_some()
+    }
 }
 
 impl TryFrom<PushInfo> for Approval {
@@ -166,12 +257,12 @@ impl TryFrom<PushInfo> for Approval {
                     .map_err(ApprovalError::Redis)?;
 
                 match (value.kind, data.as_slice()) {
-                    // subscribe mr
+                    // approval request: subscribe mr
                     (PushKind::Message, [channel, payload]) if channel == "mr" => {
                         serde_json::from_str::<Self>(payload).map_err(ApprovalError::JsonDecode)
                     }
 
-                    // psubscribe mr.res.$uid*
+                    // approval response: psubscribe mr.res.$uid*
                     (PushKind::PMessage, [wildcard, pattern, payload])
                         if wildcard.starts_with("mr.res.") && pattern.starts_with("mr.res.") =>
                     {
@@ -186,108 +277,5 @@ impl TryFrom<PushInfo> for Approval {
             }
             _ => Err(ApprovalError::InvalidPushInfo(format!("{:?}", value))),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use crate::pubsub::{cli, init, Agent, Approval, PubSub, User};
-
-    #[test]
-    fn test_serde() {
-        let me = User {
-            id: "user001".to_string(),
-            name: "foo".to_string(),
-        };
-        let other = User {
-            id: "user002".to_string(),
-            name: "bar".to_string(),
-        };
-        let approval_response = Approval {
-            requester: me,
-            approver: Some(other),
-            pid: "project/001".to_string(),
-            mid: "merge/001".to_string(),
-        };
-        let x = serde_json::to_string(&approval_response).unwrap();
-        println!("{}", x);
-    }
-
-    #[tokio::test]
-    async fn test_all() {
-        let (tx_approval, mut rx_approval) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while let Some(approval) = rx_approval.recv().await {
-                println!("<< recv approval: {:?}", approval);
-            }
-        });
-
-        // init
-        let me = User {
-            id: "001".to_string(),
-            name: "me".to_string(),
-        };
-
-        init("127.0.0.1", 6379, tx_approval, &me).unwrap();
-
-        // init - subscriptions
-        cli().sub_approval_request().await.unwrap();
-        cli().sub_approval_response(&me).await.unwrap();
-        let online_users = cli().oneline_users().await.unwrap();
-        assert_eq!(1, online_users);
-
-        // publish approval request
-        let approval_request = Approval {
-            requester: me.clone(),
-            approver: None,
-            pid: "project/001".to_string(),
-            mid: "merge/001".to_string(),
-        };
-        cli().pub_approval_request(&approval_request).await.unwrap();
-
-        // foo publish approval response
-        let foo = User {
-            id: "002".to_string(),
-            name: "foo".to_string(),
-        };
-        let approval_response_of_foo = Approval {
-            requester: me,
-            approver: Some(foo.clone()),
-            pid: "project/001".to_string(),
-            mid: "merge/001".to_string(),
-        };
-        let (tx_approval, mut _rx_approval) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while let Some(approval) = _rx_approval.recv().await {
-                println!("<< foo recv approval: {:?}", approval);
-            }
-        });
-        let agent_foo = Agent::new("127.0.0.1", 6379, tx_approval, &foo).unwrap();
-        agent_foo
-            .pub_approval_response(&approval_response_of_foo)
-            .await
-            .unwrap();
-
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
-
-    #[tokio::test]
-    async fn test_semaphore_lock() {
-        let (tx_approval, mut rx_approval) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while let Some(approval) = rx_approval.recv().await {
-                println!("<< recv approval: {:?}", approval);
-            }
-        });
-
-        // init
-        let me = User {
-            id: "001".to_string(),
-            name: "me".to_string(),
-        };
-
-        init("127.0.0.1", 6379, tx_approval, &me).unwrap();
     }
 }

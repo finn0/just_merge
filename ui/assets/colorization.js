@@ -88,19 +88,3 @@ function addLog(log) {
 
     logContainer.scrollTop = logContainer.scrollHeight;
 }
-
-function simulateLogs() {
-    const coloredLogs = [
-        "\x1b[32m[info] This is an info message.\x1b[0m",
-        "\x1b[33m[warn] This is a warning message.\x1b[0m",
-        "\x1b[31m[error] This is an error message.\x1b[0m",
-        "\x1b[90m[debug] This is a debug message.\x1b[0m",
-    ];
-
-    setInterval(() => {
-        const randomLog = coloredLogs[Math.floor(Math.random() * coloredLogs.length)];
-        addLog(randomLog);
-    }, 1000);
-}
-
-// simulateLogs();
